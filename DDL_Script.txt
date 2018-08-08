@@ -1,0 +1,144 @@
+CREATE SCHEMA Airport;
+
+SET SEARCH_PATH TO Airport;
+
+CREATE TABLE Airlines (
+Airline_ID VARCHAR(10),
+Airline_Name VARCHAR(50) NOT NULL,
+PRIMARY KEY (Airline_ID)
+);
+
+CREATE TABLE City (
+PinCode NUMERIC(6),
+CName VARCHAR(20) NOT NULL,
+State VARCHAR(20) NOT NULL,
+Country VARCHAR(20) NOT NULL,
+PRIMARY KEY (PinCode)
+);
+
+CREATE TABLE Airport (
+Airport_Name VARCHAR(100) NOT NULL,
+City_PinCode NUMERIC(6) NOT NULL,
+Airport_ID VARCHAR(3),
+PRIMARY KEY (Airport_ID),
+FOREIGN KEY (City_PinCode) REFERENCES City(PinCode)
+ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE TABLE Flight_Type (
+Flight_Type VARCHAR(30),
+Mileage DECIMAL(6,3) NOT NULL CHECK ( Mileage>0.0 ),
+PRIMARY KEY (Flight_Type)
+);
+
+CREATE TABLE Flight_Capacity (
+Flight_Type VARCHAR(30),
+Class VARCHAR(10),
+Capacity NUMERIC(3) NOT NULL CHECK ( Capacity>0 ),
+PRIMARY KEY (Flight_Type, Class),
+FOREIGN KEY (Flight_Type) REFERENCES Flight_Type(Flight_Type)
+ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE Flight (
+Flight_No NUMERIC(4),
+Flight_Type VARCHAR(30),
+Total_Capacity NUMERIC(3) NOT NULL CHECK ( Total_Capacity>=0 ),
+Total_Dist_Travelled NUMERIC(6) NOT NULL CHECK ( Total_Dist_Travelled>0 ),
+Airline_ID VARCHAR(10) NOT NULL,
+PRIMARY KEY (Flight_No),
+FOREIGN KEY (Airline_ID) REFERENCES Airlines(Airline_ID)
+ON DELETE SET NULL ON UPDATE CASCADE,
+FOREIGN KEY (Flight_Type) REFERENCES Flight_Type(Flight_Type)
+ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE TABLE Flight_Stop (
+Flight_No NUMERIC(4),
+Source_Airport_ID VARCHAR(3),
+From_Terminal NUMERIC(2) NOT NULL,
+Dep_Time TIME NOT NULL,
+Dest_Airport_ID VARCHAR(3) NOT NULL,
+To_Terminal NUMERIC(2) NOT NULL,
+Arr_Time TIME NOT NULL,
+Arrived_after_Days NUMERIC(1) NOT NULL,
+PRIMARY KEY (Flight_No, Source_Airport_ID,Dest_Airport_ID),
+FOREIGN KEY (Flight_No) REFERENCES Flight(Flight_No)
+ON DELETE SET NULL ON UPDATE CASCADE,
+FOREIGN KEY (Source_Airport_ID) REFERENCES Airport(Airport_ID)
+ON DELETE RESTRICT ON UPDATE CASCADE,
+FOREIGN KEY (Dest_Airport_ID) REFERENCES Airport(Airport_ID)
+ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE TABLE Flight_Run (
+Flight_No NUMERIC(4),
+Source_Airport_ID VARCHAR(3),
+Dest_Airport_ID VARCHAR(3),
+Journey_Date DATE,
+Act_Dep_Time TIME,
+Act_Arr_Time TIME,
+Arrived_after_Days NUMERIC(1),
+PRIMARY KEY(Flight_No,Source_Airport_ID,Dest_Airport_ID,Journey_Date),
+FOREIGN KEY (Flight_No,Source_Airport_ID,Dest_Airport_ID) REFERENCES Flight_Stop(Flight_No,Source_Airport_ID,Dest_Airport_ID)
+ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE Flight_Run_Class (
+Flight_No NUMERIC(4),
+Source_Airport_ID VARCHAR(3),
+Dest_Airport_ID VARCHAR(3),
+Journey_Date DATE,
+Class VARCHAR(10),
+Price DECIMAL(10,2) NOT NULL CHECK (Price>0.0 ),
+PRIMARY KEY(Flight_No,Class,Source_Airport_ID,Dest_Airport_ID,Journey_Date),
+FOREIGN KEY (Flight_No,Source_Airport_ID,Dest_Airport_ID,Journey_Date) REFERENCES Flight_Run(Flight_No,Source_Airport_ID,Dest_Airport_ID,Journey_Date)
+ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+
+
+CREATE TABLE Employees (
+PAN_No VARCHAR(10),
+EName VARCHAR(50) NOT NULL,
+Date_Of_Birth DATE NOT NULL,
+Job_Category VARCHAR(40) NOT NULL,
+Sex VARCHAR(1) NOT NULL,
+Phone_No NUMERIC(15) NOT NULL,
+Address VARCHAR(300) NOT NULL,
+Works_At_Airport_ID VARCHAR(3) NOT NULL,
+Email_ID VARCHAR(50),
+PRIMARY KEY (PAN_No),
+FOREIGN KEY (Works_At_Airport_ID) REFERENCES Airport(Airport_ID)
+ON DELETE SET NULL ON UPDATE CASCADE
+);
+
+CREATE TABLE Passenger (
+Name VARCHAR(40) NOT NULL,
+ID_Proof_No VARCHAR(25),
+Date_Of_Birth DATE NOT NULL,
+Sex CHAR(1) NOT NULL,
+Country VARCHAR(20),
+Phone_No NUMERIC(15) NOT NULL,
+Email_ID VARCHAR(50),
+PRIMARY KEY (ID_Proof_No,Country)
+);
+
+CREATE TABLE Ticket (
+Ticket_No NUMERIC(10),
+Seat_No NUMERIC(3) NOT NULL CHECK( Seat_No>-2 ),
+Class VARCHAR(10) NOT NULL,
+Price DECIMAL(10,2) NOT NULL CHECK (Price>=0.0 ),
+Date_Of_Booking DATE NOT NULL,
+Journey_Date DATE NOT NULL,
+Passenger_ID VARCHAR(25) NOT NULL,
+Flight_No NUMERIC(4) NOT NULL,
+Pass_Country VARCHAR(20) NOT NULL,
+Source_Airport_ID VARCHAR(3) NOT NULL,
+Dest_Airport_ID VARCHAR(3) NOT NULL,
+PRIMARY KEY (Ticket_No),
+FOREIGN KEY (Passenger_ID, Pass_Country) REFERENCES Passenger(ID_Proof_No,Country)
+ON DELETE SET NULL ON UPDATE CASCADE,
+FOREIGN KEY (Flight_No,Source_Airport_ID,Dest_Airport_ID,Class,Journey_Date) REFERENCES Flight_Run_Class(Flight_No,Source_Airport_ID,Dest_Airport_ID,Class,Journey_Date)
+ON DELETE SET NULL ON UPDATE CASCADE
+);

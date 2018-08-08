@@ -1,0 +1,236 @@
+CREATE OR REPLACE FUNCTION FLIGHT_IU() RETURNS TRIGGER AS $BODY$
+DECLARE
+    cap Flight_Capacity.Capacity%TYPE;
+	ftype Flight.Flight_Type%TYPE;
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+		ftype := NEW.Flight_Type;
+		FOR cap IN SELECT Capacity FROM FLIGHT_CAPACITY WHERE Flight_Type = ftype
+		LOOP
+			NEW.Total_Capacity := NEW.Total_Capacity + cap;
+		END LOOP;
+    ELSEIF (TG_OP = 'UPDATE') THEN
+		IF (NEW.Flight_Type!=OLD.Flight_Type) THEN
+			NEW.Total_Capacity := 0;
+			ftype := NEW.Flight_Type;
+			FOR cap IN SELECT Capacity FROM FLIGHT_CAPACITY WHERE Flight_Type = ftype
+			LOOP
+				NEW.Total_Capacity := NEW.Total_Capacity + cap;
+			END LOOP;
+		END IF;
+    END IF;
+    RETURN NEW;
+ 
+END $BODY$ LANGUAGE 'plpgsql';
+
+
+CREATE TRIGGER FLIGHT_TRIGGER
+    BEFORE INSERT OR UPDATE ON Flight
+        FOR EACH ROW EXECUTE PROCEDURE FLIGHT_IU();
+		
+		
+
+CREATE OR REPLACE FUNCTION FLIGHT_CAPACITY_IUD() RETURNS TRIGGER AS $BODY$
+DECLARE
+    
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        UPDATE FLIGHT SET Total_Capacity = Total_Capacity + NEW.Capacity WHERE Flight.Flight_Type = NEW.Flight_Type ;
+    ELSEIF (TG_OP = 'UPDATE') THEN            
+        UPDATE FLIGHT SET Total_Capacity = Total_Capacity - OLD.Capacity + NEW.Capacity WHERE Flight.Flight_Type = NEW.Flight_Type ;
+    ELSEIF (TG_OP = 'DELETE') THEN
+        UPDATE FLIGHT SET Total_Capacity = Total_Capacity - OLD.Capacity WHERE Flight.Flight_Type = OLD.Flight_Type ;
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+ 
+END $BODY$ LANGUAGE 'plpgsql';
+
+
+CREATE TRIGGER FLIGHT_CAPACITY_TRIGGER
+    AFTER INSERT OR UPDATE OR DELETE ON Flight_Capacity
+        FOR EACH ROW EXECUTE PROCEDURE FLIGHT_CAPACITY_IUD();
+		
+		
+CREATE OR REPLACE FUNCTION TICKET_INSERT() RETURNS TRIGGER AS $BODY$
+DECLARE 
+    max_ticket_no integer :=0;
+    max_seat_no integer :=0;
+    r record;
+    max_cap Flight_Capacity.Capacity%TYPE;
+    base_price Flight_Run_Class.Price%TYPE;
+    days integer;
+    A Flight_Stop.Source_Airport_ID%TYPE;
+    B Flight_Stop.Source_Airport_ID%TYPE;
+    C Flight_Stop.Source_Airport_ID%TYPE;
+    tmp integer;
+    Total_People_Travelling integer;
+    new_price Decimal;
+BEGIN
+
+    SELECT COUNT(*) FROM TICKET WHERE TICKET.Flight_No = NEW.Flight_No and TICKET.Journey_Date = NEW.Journey_Date and TICKET.Seat_No > 0 INTO tmp;
+
+    IF tmp > 0 THEN
+	RETURN NULL;
+    END IF;
+
+    SELECT COUNT(*) FROM TICKET INTO max_ticket_no;
+    
+    FOR r in SELECT COUNT(*) , Source_Airport_ID FROM Flight_Stop WHERE Flight_Stop.Flight_No = NEW.Flight_No GROUP BY Source_Airport_ID
+    LOOP
+	  IF r.count = 1 THEN
+	  	B = r.Source_Airport_ID;
+	  ELSE
+		A = r.Source_Airport_ID;
+	  END IF;
+    END LOOP;
+    
+    SELECT DEST_Airport_ID FROM FLIGHT_STOP INTO C WHERE FLIGHT_STOP.Flight_No = NEW.Flight_No AND FLIGHT_STOP.Source_Airport_ID = B;
+
+    SELECT COUNT(*) FROM TICKET WHERE TICKET.Flight_No = NEW.Flight_No and TICKET.Class = NEW.Class and TICKET.Journey_Date = NEW.Journey_Date INTO Total_People_Travelling ;
+
+    IF NEW.Source_Airport_ID = A and NEW.Dest_Airport_ID = B THEN
+        SELECT COUNT(*) FROM TICKET WHERE TICKET.Flight_No = NEW.Flight_No and TICKET.Class = NEW.Class and TICKET.Journey_Date = NEW.Journey_Date and TICKET.Source_Airport_ID = B and TICKET.Dest_Airport_ID = C INTO tmp;
+        Total_People_Travelling :=	Total_People_Travelling - tmp;
+    ELSEIF NEW.Source_Airport_ID = B and NEW.Dest_Airport_ID = C THEN
+        SELECT COUNT(*) FROM TICKET WHERE TICKET.Flight_No = NEW.Flight_No and TICKET.Class = NEW.Class and TICKET.Journey_Date = NEW.Journey_Date and TICKET.Source_Airport_ID = A and TICKET.Dest_Airport_ID = B INTO tmp;
+        Total_People_Travelling :=	Total_People_Travelling - tmp;
+    END IF;
+    
+    max_seat_no := Total_People_Travelling + 1;
+    max_ticket_no := max_ticket_no+1;
+	
+    SELECT FC.Capacity FROM FLIGHT as F NATURAL JOIN FLIGHT_CAPACITY AS FC WHERE F.Flight_No = NEW.Flight_No and FC.Class = NEW.Class INTO max_cap;
+
+    IF max_cap<max_seat_no THEN
+        RETURN NULL;
+    END IF;
+    
+    NEW.Seat_No=0;
+    NEW.Ticket_No=max_ticket_no;
+    
+    SELECT FRC.Price into base_price FROM Flight_Run_Class as FRC WHERE FRC.Flight_No=NEW.Flight_No and FRC.Journey_Date = NEW.Journey_Date and FRC.Class=NEW.Class and FRC.Source_Airport_ID=NEW.Source_Airport_ID and FRC.Dest_Airport_ID=NEW.Dest_Airport_ID and FRC.Class=NEW.Class;
+
+    days := (NEW.Journey_Date - NEW.Date_of_Booking)::int;
+
+    --SELECT date NEW.Journey_Date - date NEW.Date_of_Booking into days;
+
+    IF days > 60 THEN
+        new_price := base_price;
+    ELSE 
+        new_price := base_price+base_price*(60-days)/100.0;   
+    END IF;
+
+    NEW.Price=new_price;
+
+    RETURN NEW;
+END $BODY$ language 'plpgsql';
+
+CREATE TRIGGER INSERT_TICKET
+BEFORE INSERT ON TICKET 
+    FOR EACH ROW EXECUTE PROCEDURE TICKET_INSERT();
+
+
+CREATE OR REPLACE FUNCTION TICKET_DELETE() RETURNS TRIGGER AS $BODY$
+DECLARE 
+    
+BEGIN
+	IF ( TG_OP = 'DELETE' ) THEN
+		UPDATE Airport.Ticket SET Seat_No=-1 WHERE Ticket.Ticket_No = OLD.Ticket_No;
+	END IF;
+	RETURN NULL;
+END $BODY$ language 'plpgsql';
+
+CREATE TRIGGER DELETE_TICKET
+BEFORE DELETE ON TICKET 
+    FOR EACH ROW EXECUTE PROCEDURE TICKET_DELETE();
+	
+	
+CREATE OR REPLACE FUNCTION Seat_Assign(FNo VARCHAR, Jdate DATE) RETURNS INTEGER AS $BODY$
+DECLARE 
+    max_seat_no integer :=0;
+    max_seat_no1 integer :=0;
+    r record;
+    ctype Flight_Capacity.Class%TYPE;
+    A Flight_Stop.Source_Airport_ID%TYPE;
+    B Flight_Stop.Source_Airport_ID%TYPE;
+    C Flight_Stop.Source_Airport_ID%TYPE;
+    tmp integer;
+BEGIN
+    SELECT COUNT(*) FROM TICKET WHERE TICKET.Flight_No = FNo and TICKET.Journey_Date = Jdate and TICKET.Seat_No > 0 INTO tmp;
+
+    IF tmp > 0 THEN
+	RETURN NULL;
+    END IF;
+
+    FOR r in SELECT COUNT(*) , Source_Airport_ID FROM Flight_Stop WHERE Flight_Stop.Flight_No = FNo GROUP BY Source_Airport_ID
+    LOOP
+	  IF r.count = 1 THEN
+	  	B = r.Source_Airport_ID;
+	  ELSE
+		A = r.Source_Airport_ID;
+	  END IF;
+    END LOOP;
+    
+    SELECT DEST_Airport_ID FROM FLIGHT_STOP INTO C WHERE FLIGHT_STOP.Flight_No = FNo AND FLIGHT_STOP.Source_Airport_ID = B;
+	
+    FOR ctype IN SELECT FC.Class FROM FLIGHT AS F NATURAL JOIN FLIGHT_CAPACITY as FC WHERE F.Flight_No = Fno
+    LOOP
+    
+    	  	max_seat_no=0;
+    		FOR r in SELECT * FROM TICKET WHERE TICKET.Flight_No = Fno and TICKET.Class = ctype and TICKET.Source_Airport_ID = A and TICKET.Dest_Airport_ID = C and TICKET.Journey_Date=Jdate
+            LOOP
+                 IF r.Seat_No >= 0 THEN
+			UPDATE TICKET SET Seat_No = (max_seat_no+1) WHERE TICKET.Ticket_No = r.Ticket_No;
+        		max_seat_no = max_seat_no + 1 ;
+        	   END IF; 
+            END LOOP;
+
+            
+            max_seat_no1=max_seat_no;
+        
+            FOR r in SELECT * FROM TICKET WHERE TICKET.Flight_No = Fno and TICKET.Class = ctype and TICKET.Source_Airport_ID = A and TICKET.Dest_Airport_ID = B and TICKET.Journey_Date=Jdate
+            LOOP
+                 IF r.Seat_No >= 0 THEN
+        		UPDATE TICKET SET Seat_No = (max_seat_no1+1) WHERE TICKET.Ticket_No = r.Ticket_No;
+        		max_Seat_no1 = max_seat_no1 + 1 ;
+        	   END IF; 
+            END LOOP;
+          
+            max_seat_no1=max_seat_no;
+        
+            FOR r in SELECT * FROM TICKET WHERE TICKET.Flight_No = Fno and TICKET.Class = ctype and TICKET.Source_Airport_ID = B and TICKET.Dest_Airport_ID = C and TICKET.Journey_Date=Jdate
+            LOOP
+                 IF r.Seat_No >= 0 THEN
+        		UPDATE TICKET SET Seat_No = (max_seat_no1+1) WHERE TICKET.Ticket_No = r.Ticket_No;
+        		max_Seat_no1 = max_seat_no1 + 1 ;
+        	   END IF; 
+            END LOOP;
+            
+    END LOOP;
+	
+    RETURN 0;
+
+ END $BODY$ language 'plpgsql';
+ 
+ 
+ CREATE OR REPLACE FUNCTION Call_Seat_Assign() RETURNS INTEGER AS $BODY$
+DECLARE 
+	r record;
+	Fno FLIGHT.Flight_No%TYPE;
+	curtime timestamp;
+	hours integer;
+BEGIN
+	FOR Fno IN SELECT DISTINCT Flight_No FROM FLIGHT_RUN AS FR NATURAL JOIN FLIGHT_STOP AS FS ORDER BY FS.Dep_Time      
+	LOOP
+
+		SELECT EXTRACT(EPOCH FROM (FR.Journey_Date || ' ' || FS.Dep_Time)::timestamp) INTO curtime;
+		SELECT EXTRACT(EPOCH FROM (curtime-current_timestamp))/3600 INTO hours;			
+		IF hours > 0 and hours < 3 THEN
+			EXECUTE Seat_Assign(Fno,FR.Journey_Date);
+		END IF;
+
+	END LOOP;
+	RETURN 0;
+
+END $BODY$ language 'plpgsql';
